@@ -1,0 +1,41 @@
+# Gizli bilgiler — ASLA paylaşma
+gizli.json
+client_secret*.json
+token*.json
+.env
+
+# Kanal verileri ve kişisel kayıtlar
+profiller/
+ayarlar.json
+profiller.json
+gecmis.json
+kuyruk.json
+yorumlar.json
+isler.json
+kanal_performans.json
+
+# Üretilen ve büyük dosyalar
+ciktilar/
+gecici/
+hazir_videolar/
+gelen/
+indirilen/
+arkaplan_videolari/
+bg_klipler/
+bg_resimler/
+muzik/
+NotebookLM/
+eski_kapanis/
+fonts_tmp/
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.m4v
+*.ass
+
+# Yedekler
+main_eski_*.py
+__pycache__/
+*.pyc
+desktop.ini

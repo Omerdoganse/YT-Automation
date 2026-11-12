@@ -1,0 +1,8 @@
+google-genai
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+edge-tts
+faster-whisper
+imageio-ffmpeg
+av
