@@ -3803,12 +3803,83 @@ def _cesit_sec(son_kullanilan, secenekler):
     return random.choices(adaylar, weights=[secenekler[k] for k in adaylar])[0]
 
 
+def kanal_videolari(log=print, yenile=False):
+    """Kanala yüklenmiş BÜTÜN videolar (programın dışından, Studio'dan yüklenenler dahil): [{'baslik', 'aciklama'}].
+    YouTube'dan çekilir, 6 saat kanal klasöründe saklanır. Yeni konu seçerken tekrarı önlemek için kullanılır."""
+    dosya = _nblm_dosya("kanal_videolari.json")
+    v = _json_oku(dosya, {})
+    try:
+        taze = (datetime.datetime.now() - datetime.datetime.fromisoformat(v.get("zaman", ""))).total_seconds() < 6 * 3600
+    except ValueError:
+        taze = False
+    if taze and not yenile and v.get("videolar"):
+        return v["videolar"]
+    if not os.path.exists(TOKEN):
+        return v.get("videolar", [])
+    try:
+        yt = yt_servis(False, log)
+        kanal = yt.channels().list(part="contentDetails", mine=True).execute()["items"][0]
+        liste = kanal["contentDetails"]["relatedPlaylists"]["uploads"]
+        videolar, sayfa = [], None
+        while True:
+            r = yt.playlistItems().list(part="snippet", playlistId=liste, maxResults=50, pageToken=sayfa).execute()
+            for it in r.get("items", []):
+                sn = it.get("snippet", {})
+                videolar.append({"baslik": sn.get("title", ""),
+                                 "aciklama": re.sub(r"\s+", " ", sn.get("description", ""))[:300],
+                                 "id": sn.get("resourceId", {}).get("videoId", "")})
+            sayfa = r.get("nextPageToken")
+            if not sayfa or len(videolar) >= 500:
+                break
+        _json_yaz(dosya, {"zaman": datetime.datetime.now().isoformat(timespec="seconds"), "videolar": videolar})
+        log(f"[i] Kanaldaki {len(videolar)} video tekrar kontrolü için alındı.")
+        return videolar
+    except Exception as e:
+        log(f"[~] Kanal videoları alınamadı, kayıtlı liste kullanılıyor ({str(e)[:120]})")
+        return v.get("videolar", [])
+
+
+def konu_tekrar_mi(paket, mevcutlar, log=print):
+    """Yeni konu, kanalda/sırada zaten olan bir videoyla AYNI tekniği, etkiyi ya da ana fikri mi anlatıyor?
+    Önce kelime örtüşmesine, sonra Gemini'nin anlam karşılaştırmasına bakar. Döndürür: benzeyen başlık ya da ''."""
+    yeni = f"{paket.get('baslik', '')} | {paket.get('konu', '')}"
+    for m_ in mevcutlar:
+        if max(benzerlik(paket.get("konu", ""), m_), benzerlik(paket.get("baslik", ""), m_)) >= 0.5:
+            return m_[:120]
+    if not mevcutlar:
+        return ""
+    liste = "\n".join(f"{i + 1}. {m_[:220]}" for i, m_ in enumerate(mevcutlar[-300:]))
+    prompt = f"""YouTube kanalına yeni bir kısa video eklenecek:
+YENİ: {yeni}
+
+Kanalda ve yayın sırasında zaten olan videolar:
+{liste}
+
+Yeni video, listedekilerden biriyle AYNI tekniği, etkiyi, araştırmayı ya da ana tavsiyeyi mi anlatıyor? Başlık farklı
+olsa bile içerik aynıysa (ör. ikisi de "hedefini kimseye söyleme" diyorsa, ikisi de "Eğer-o zaman planı"nı
+anlatıyorsa) "ayni": true. Sadece genel alan aynıysa (ikisi de odaklanma hakkında ama farklı teknik) false.
+Yanıtı YALNIZCA şu JSON biçiminde ver: {{"ayni": true/false, "hangisi": "listedeki benzer videonun başlığı ya da boş"}}"""
+    try:
+        v = _json_coz(_gemini_uret(prompt, log, json_mod=True))
+        if isinstance(v, dict) and v.get("ayni"):
+            return str(v.get("hangisi") or "kanaldaki bir video")[:120]
+    except IptalHatasi:
+        raise
+    except Exception as e:
+        log(f"[~] Anlam karşılaştırması yapılamadı ({str(e)[:100]}); sadece kelime kontrolü yapıldı.")
+    return ""
+
+
 def nblm_konu_uret(alan="Karışık", konu=None, log=print):
     """Gemini: konu + başlık + açılış kancası + NotebookLM kaynak metni + NotebookLM istemi + açıklama/etiket."""
     kuyruk = nblm_kuyruk_oku()
     eskiler = [g.get("konu", "") for g in gecmis_oku()] + [p_.get("konu", "") for p_ in kuyruk]
     canli = kanal_performans_ozeti(log)
     eskiler += re.findall(r'- "([^"]+)"', canli)       # kanaldaki eski videolar da tekrar edilmesin
+    kanaldakiler = [f"{v_['baslik']} — {v_['aciklama'][:160]}" for v_ in kanal_videolari(log) if v_.get("baslik")]
+    sirada = [f"{p_.get('baslik', '')} — {p_.get('konu', '')}" for p_ in kuyruk
+              if p_.get("durum") in ("video_bekliyor", "islendi")]
+    mevcutlar = list(dict.fromkeys(kanaldakiler + sirada))
     alan_ = (_cesit_sec([p_.get("alan", "") for p_ in kuyruk], BIRADIM_ALAN_AGIRLIK)
              if alan == "Karışık" else alan)
     kalip_id = _cesit_sec([p_.get("kalip", "") for p_ in kuyruk], {k: a for k, a, _ in BIRADIM_KALIPLAR})
@@ -3824,7 +3895,10 @@ anlatım, 50-75 saniye). Hedef kitle: 18-35 yaş, kendini geliştirmek isteyen T
 GÖREV: {f'Şu konuda bir video paketi hazırla: "{konu}".' if konu else f'"{alan_}" alanında YENİ bir video konusu bul ve paketini hazırla.'}
 Konu bilimsel/psikolojik bir gerçeğe ya da bilinen bir tekniğe dayansın (adı konulabilsin: "Zeigarnik etkisi",
 "Pomodoro", "Aralıklı tekrar" gibi); uydurma istatistik YASAK. Hemen uygulanabilir somut bir şey öğretsin.
-Şu konulara benzemesin: {'; '.join(e for e in eskiler[-40:] if e) or '-'}
+KANALDA VE SIRADA ZATEN OLAN VİDEOLAR (bunlarla aynı tekniği, etkiyi, araştırmayı ya da ana tavsiyeyi ASLA
+tekrar etme; başlığı değiştirmek yetmez, konu gerçekten farklı olmalı):
+{chr(10).join('- ' + m_[:140] for m_ in mevcutlar[-150:]) or '-'}
+Ayrıca şunlara da benzemesin: {'; '.join(e for e in eskiler[-40:] if e) or '-'}
 
 Alanlar:
 - konu: tek cümle, ne anlatıldığı.
@@ -3845,15 +3919,22 @@ Alanlar:
 
 Yanıtı YALNIZCA şu JSON biçiminde ver:
 {{"konu": "...", "baslik": "...", "kanca": "...", "kaynak": "...", "istem": "...", "aciklama": "...", "etiketler": ["..."]}}"""
-    for deneme in range(3):
+    for deneme in range(4):
         v = _json_coz(_gemini_uret(prompt, log, json_mod=True))
         if not isinstance(v, dict) or not str(v.get("kaynak", "")).strip():
             continue
         k_ = str(v.get("konu", "")).strip()
-        if not konu and max([benzerlik(k_, e) for e in eskiler if e] + [0]) >= 0.45 and deneme < 2:
+        if not konu and max([benzerlik(k_, e) for e in eskiler if e] + [0]) >= 0.45 and deneme < 3:
             log("[~] Konu öncekilere fazla benzedi, yenisi isteniyor...")
             prompt += f"\n\nÖNEMLİ: '{k_}' daha önce işlenene çok benziyor; bambaşka bir konu seç."
             continue
+        if not konu:
+            benzeyen = konu_tekrar_mi({"konu": k_, "baslik": v.get("baslik", "")}, mevcutlar, log)
+            if benzeyen:
+                log(f"[~] Bu konu kanalda zaten var ('{benzeyen}'), başka konu isteniyor...")
+                prompt += (f"\n\nÖNEMLİ: '{k_}' kanaldaki '{benzeyen}' videosuyla aynı şeyi anlatıyor; "
+                           "tamamen farklı bir teknik/etki seç.")
+                continue
         baslik = baslik_sinirla(re.sub(r"\s*#\w+", "", str(v.get("baslik") or k_)).strip(), 90)
         aciklama = str(v.get("aciklama", "")).strip()
         if "#biradım" not in aciklama.lower():
