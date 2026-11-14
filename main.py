@@ -4735,7 +4735,13 @@ def bekleyen_isleri_yap(log=print, asama=_bos):
                 if kayit and not kayit.get("video_id") and os.path.exists(kayit.get("dosya", "")):
                     kayit.update(onay_bekliyor=False, reddedildi=False)
                     gecmis_kaydet(kayit)
-                    youtube_yukle(kayit, "public", None, log)
+                    yz = None
+                    if is_.get("yayin"):
+                        # ör. "2026-11-15T12:00:00+03:00": video gizli yüklenir, YouTube o saatte kendisi yayınlar
+                        yz = datetime.datetime.fromisoformat(is_["yayin"])
+                        if yz.tzinfo is None:
+                            yz = yz.astimezone()
+                    youtube_yukle(kayit, "private" if yz else "public", yz, log)
                 continue
             if is_.get("is") == "icerik_dogrula":
                 kayit = next((k for k in gecmis_oku() if k.get("tarih") == is_.get("tarih")), None)
