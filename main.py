@@ -28,6 +28,12 @@ import hashlib
 import subprocess
 import base64
 import difflib
+
+for _akis in (sys.stdout, sys.stderr):          # Windows konsolunda emoji/Türkçe karakter yazarken çökmesin
+    try:
+        _akis.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import io
 import wave
 
@@ -3558,7 +3564,7 @@ def _ilk_yorum_at(kayit, yt, log):
         m = str(e)
         deneme = kayit["ilk_yorum"].get("deneme", 0) + 1
         kayit["ilk_yorum"]["deneme"] = deneme
-        if deneme >= 3 or "commentsDisabled" in m or "videoNotFound" in m:
+        if deneme >= 4 or "commentsDisabled" in m:      # 'video bulunamadı' yeni yüklemede geçicidir
             kayit["ilk_yorum"].update(durum="hata", neden=m[:200])
         log(f"[!] İlk yorum atılamadı ({m[:150]})")
 
@@ -4770,8 +4776,20 @@ def plan_slotlari(ayar, simdi=None, gecmis_dahil=False):
 
 def plan_kayitlari():
     """Yayın saatine bağlı, YouTube'da hâlâ duran videolar (YouTube'dan silinenler sayılmaz)."""
-    return {k["plan_slot"]: k for k in gecmis_oku()
-            if k.get("plan_slot") and k.get("video_id") and not (k.get("istatistik") or {}).get("silindi")}
+    dolu = {}
+    for k in gecmis_oku():
+        if not k.get("video_id") or (k.get("istatistik") or {}).get("silindi"):
+            continue
+        slot = k.get("plan_slot")
+        if not slot and k.get("yayin_zamani"):       # elle/işle zamanlanan videolar da o saati doldurur
+            try:
+                slot = _slot_anahtar(datetime.datetime.strptime(k["yayin_zamani"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=datetime.timezone.utc).astimezone())
+            except ValueError:
+                slot = None
+        if slot:
+            dolu.setdefault(slot, k)
+    return dolu
 
 
 def bekleyen_isleri_yap(log=print, asama=_bos):
@@ -4782,6 +4800,22 @@ def bekleyen_isleri_yap(log=print, asama=_bos):
     isler = _json_oku(dosya, [])
     if not isler:
         return
+    kilit = os.path.join(GECICI, "isler.kilit")
+    if os.path.exists(kilit) and time.time() - os.path.getmtime(kilit) < 1800:
+        log("[~] Bekleyen işler şu anda başka bir pencerede yapılıyor, atlandı.")
+        return
+    try:
+        with open(kilit, "w") as f_:
+            f_.write(str(os.getpid()))
+        _bekleyen_isleri_yap(dosya, isler, log, asama)
+    finally:
+        try:
+            os.remove(kilit)
+        except OSError:
+            pass
+
+
+def _bekleyen_isleri_yap(dosya, isler, log, asama):
     kalan = []
     for is_ in isler:
         try:
@@ -4822,6 +4856,7 @@ def bekleyen_isleri_yap(log=print, asama=_bos):
                         yz = datetime.datetime.fromisoformat(is_["yayin"])
                         if yz.tzinfo is None:
                             yz = yz.astimezone()
+                        kayit["plan_slot"] = _slot_anahtar(yz.astimezone())
                     youtube_yukle(kayit, "private" if yz else "public", yz, log)
                 continue
             if is_.get("is") == "icerik_dogrula":
@@ -5407,6 +5442,57 @@ def roboto_hazirla():
                 pass
 
 
+KILAVUZ = [
+    ("1. Program ne yapar?", [
+        "Shorts Stüdyo, YouTube kanallarının videolarını hazırlar, sıraya koyar ve belirlediğin saatlerde yayınlar.",
+        "Her kanal ayrı bir profildir. Sol üstteki kanal adına tıklayarak kanal değiştirirsin.",
+        "Tuşların yanındaki ( ! ) simgesinin üstüne gelirsen o tuşun ne işe yaradığı yazar.",
+    ]),
+    ("2. BirAdım kanalı: NotebookLM ile video", [
+        "Panel > Konular: '＋ 5 konu üret' ile yeni konular hazırlat. Program kanaldaki bütün videolara bakar, "
+        "aynı konuyu ikinci kez seçmez.",
+        "Bir konunun '📋 Kaynak' tuşuna bas; NotebookLM'de yeni not defteri aç, 'Kopyalanan metin' seçip yapıştır.",
+        "Aynı konunun '📝 İstem' tuşuna bas; NotebookLM'de Video Özeti'nin yanındaki oka tıkla, Kısa + Türkçe seç, "
+        "istemi kutuya yapıştır ve oluştur.",
+        "Video hazır olunca indir. Panel > 'Videoları seç' ile programa ver.",
+        "Program NotebookLM logolarını keser, videoyu hızlandırır, köşeye rozet ve sona kapanış kartı ekler.",
+        "Video 'Onay bekleyen videolar' listesine düşer. '▶ İzle' ile kontrol et, '✓ Onayla' ile yayın sırasına al.",
+        "! Sen onaylamadan hiçbir video yayınlanmaz.",
+    ]),
+    ("3. Hikâye kanalları: baştan sona otomatik", [
+        "Panel'de 'Oluştur'a basınca program konu bulur, hikâyeyi yazar, seslendirir, alt yazı ekler ve videoyu "
+        "hazırlar.",
+        "Arka plan videoları 'arkaplan_videolari', müzikler 'muzik' klasöründen alınır.",
+        "Ses sayfasından seslendireni, anlatım tarzını ve hızı değiştirebilirsin.",
+    ]),
+    ("4. Yayın planı", [
+        "Yayın planı sayfasında videoların hangi gün ve saatte yayınlanacağını belirlersin (ör. her gün 12:00).",
+        "'Planı şimdi doldur': boş saatler için onaylı videoları YouTube'a zamanlanmış olarak yükler. Video o "
+        "saatte kendiliğinden yayınlanır; bilgisayarın kapalı olsa bile.",
+        "'Otomatik hazırlama' açıksa Windows bu işi her gün belirlediğin saatte kendisi yapar.",
+        "Yaklaşan yayınlar listesinde hangi saatin dolu, hangisinin boş olduğunu görürsün.",
+    ]),
+    ("5. İçerik, Analiz ve Yorumlar", [
+        "İçerik: tüm videoların ve canlı izlenme sayıları. Bir videoyu seçince ayrıntıları sağda görünür.",
+        "Analiz: son 28 günün izlenmeleri, hangi videonun daha iyi tuttuğu ve en iyi yayın saati.",
+        "Yorumlar: yeni yorumlara kanalın tonunda cevap yazılır. İstersen cevabı düzenleyip kendin gönderirsin.",
+        "Her yeni videonun altına, sohbet başlatan bir ilk yorum otomatik atılır.",
+    ]),
+    ("6. Sık karşılaşılan durumlar", [
+        "'YouTube bağlı değil' yazıyorsa sol alttaki Bağlan'a bas ve kanalın bağlı olduğu Google hesabını seç.",
+        "Video YouTube'a gitmediyse önce 'Onay bekleyen videolar' listesine bak: onaylanmamış video yüklenmez.",
+        "Yanlış hazırlanan videoyu '↻' ile baştan hazırlat ya da '✕' ile listeden çıkar (dosya silinmez).",
+        "Hata olursa pencerenin altındaki kayıt ekranında nedeni yazar; aynı kayıt kanal klasöründeki "
+        "gecici/son_islem_log.txt dosyasında da durur.",
+        "! Program YouTube'dan video silmez. Silmek istediğin videoyu YouTube Studio'dan kendin silersin.",
+    ]),
+    ("7. Gizli dosyalar", [
+        "gizli.json (Gemini API anahtarı), client_secret.json ve token.json (YouTube girişi) kimseyle paylaşılmaz.",
+        "Bu dosyalar GitHub'a gönderilmez; .gitignore bunu engeller.",
+    ]),
+]
+
+
 def tema_koyu_mu(ayar):
     """'koyu' / 'acik' ya da 'sistem' (Windows'un uygulama teması)."""
     t = ayar.get("tema", "acik")
@@ -5513,6 +5599,28 @@ def arayuzu_baslat():
         roboto_hazirla()
     except Exception:
         pass
+
+    # aynı kanal için ikinci pencere açılmasın (iki pencere aynı işi iki kez yapıp çift yükleme yapabiliyordu)
+    import socket
+    global _TEK_KOPYA
+    for _dene in range(20):
+        try:
+            _TEK_KOPYA = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if os.name == "nt":
+                _TEK_KOPYA.setsockopt(socket.SOL_SOCKET, getattr(socket, "SO_EXCLUSIVEADDRUSE", -5), 1)
+            _TEK_KOPYA.bind(("127.0.0.1", 47610 + sum(AKTIF_PROFIL.encode("utf-8")) % 300))
+            _TEK_KOPYA.listen(1)
+            break
+        except OSError:
+            _TEK_KOPYA = None
+            time.sleep(0.25)          # tema/kanal değişince eski pencere kapanana kadar bekle
+    if _TEK_KOPYA is None and not os.environ.get("SHORTS_STUDYO_COKLU"):
+        _r = tk.Tk()
+        _r.withdraw()
+        messagebox.showinfo("Shorts Stüdyo zaten açık", f"'{profil_adi()}' kanalı için program zaten açık.\n\n"
+                            "Görev çubuğundaki Shorts Stüdyo penceresini kullan.")
+        _r.destroy()
+        return
 
     p = tk.Tk()
     _donma_bekcisi(p)
@@ -6344,6 +6452,86 @@ def arayuzu_baslat():
         return tk.Label(ust, text="BETA", bg=BETA_BG, fg=BETA_FG, font=F(7 if kucuk else 8, "orta"),
                         padx=px(5), pady=0)
 
+    _ipucu = {"pencere": None, "is": None}
+
+    def ipucu_gizle(_=None):
+        if _ipucu["is"]:
+            try:
+                p.after_cancel(_ipucu["is"])
+            except tk.TclError:
+                pass
+            _ipucu["is"] = None
+        if _ipucu["pencere"] is not None:
+            try:
+                _ipucu["pencere"].destroy()
+            except tk.TclError:
+                pass
+            _ipucu["pencere"] = None
+
+    def ipucu_goster(w, metin):
+        ipucu_gizle()
+        try:
+            if not w.winfo_exists() or not w.winfo_viewable():
+                return
+            t = tk.Toplevel(p)
+            t.wm_overrideredirect(True)
+            try:
+                t.attributes("-topmost", True)
+            except tk.TclError:
+                pass
+            t.configure(bg=R["hover_kenar"])
+            tk.Label(t, text=metin, bg=R["kart2"], fg=R["yazi"], font=F(9), justify="left", wraplength=px(300),
+                     padx=px(12), pady=px(9)).pack(padx=1, pady=1)
+            t.update_idletasks()
+            gen, yuk_ = t.winfo_reqwidth(), t.winfo_reqheight()
+            x = w.winfo_rootx() + w.winfo_width() // 2 - gen // 2
+            y = w.winfo_rooty() + w.winfo_height() + px(8)
+            x = max(px(8), min(x, p.winfo_screenwidth() - gen - px(8)))
+            if y + yuk_ > p.winfo_screenheight() - px(48):
+                y = w.winfo_rooty() - yuk_ - px(8)
+            t.geometry(f"+{x}+{y}")
+            _ipucu["pencere"] = t
+        except tk.TclError:
+            _ipucu["pencere"] = None
+
+    def ipucu(w, metin, gecikme=450):
+        """Fare üstüne gelince küçük açıklama balonu gösterir."""
+        def gir(_):
+            ipucu_gizle()
+            _ipucu["is"] = p.after(gecikme, lambda: ipucu_goster(w, metin))
+        for hedef_ in [w] + (list(w.winfo_children()) if isinstance(w, tk.Frame) else []):
+            hedef_.bind("<Enter>", gir, add="+")
+            hedef_.bind("<Leave>", ipucu_gizle, add="+")
+            hedef_.bind("<ButtonPress-1>", ipucu_gizle, add="+")
+        return w
+
+    def bilgi(ust, metin, bg=None):
+        """Tuşların yanındaki küçük ( ! ) simgesi: üstüne gelince ya da tıklayınca o tuşun ne işe yaradığını yazar."""
+        z = bg or zemin(ust)
+        b_ = px(18)
+        c = tk.Canvas(ust, width=b_, height=b_, bg=z, highlightthickness=0, cursor="question_arrow")
+
+        def ciz(renk):
+            c.delete("all")
+            c.create_oval(1, 1, b_ - 2, b_ - 2, outline=renk, width=1)
+            c.create_text(b_ / 2 - 0.5, b_ / 2, text="!", fill=renk, font=F(9, "orta"))
+        ciz(R["soluk"])
+        c.bind("<Enter>", lambda e: ciz(R["vurgu"]), add="+")
+        c.bind("<Leave>", lambda e: ciz(R["soluk"]), add="+")
+        ipucu(c, metin, gecikme=120)
+        c.bind("<ButtonPress-1>", lambda e: ipucu_goster(c, metin))
+        return c
+
+    def bilgi_yanina(btn, metin):
+        """Tuşa açıklama balonu ekler ve hemen yanına ( ! ) simgesi koyar."""
+        ipucu(btn, metin)
+        try:
+            yon = btn.pack_info().get("side", "left")
+            bilgi(btn.master, metin).pack(side=yon, padx=px(6))
+        except tk.TclError:
+            pass
+        return btn
+
     def hap(ust, metin="", bg=R["kart2"], fg=R["soluk"]):
         """Studio'daki yuvarlak durum etiketi (chip)."""
         f = tk.Frame(ust, bg=bg, padx=px(14), pady=px(7), cursor="hand2")
@@ -6447,8 +6635,50 @@ def arayuzu_baslat():
     oto_hap.pack(side="right")
     tema_btn.pack(side="right", padx=(0, px(10)))
     oto_hap.bagla(lambda: sayfa_goster("plan"))
+    ipucu(oto_hap, "Her gün otomatik hazırlama açık mı? Tıklayınca Yayın planı sayfası açılır.")
+    ipucu(tema_btn, "Koyu / açık tema")
+    ipucu(kanal_hap, "Kanal değiştir. Her kanalın videoları, ayarları ve YouTube bağlantısı ayrıdır.")
+    kilavuz_btn = Dugme(ust_cubuk, "?  Kılavuz", tur="hayalet", boy="kucuk", command=lambda: kilavuz_penceresi())
+    kilavuz_btn.pack(side="right", padx=(0, px(10)))
+    ipucu(kilavuz_btn, "Programın nasıl kullanılacağını adım adım anlatan kullanım kılavuzunu açar.")
     uretim_hap = hap(ust_cubuk, "", bg=R["secili"], fg=R["vurgu"])
     uretim_hap.bagla(lambda: uw_goster())
+
+    def kilavuz_penceresi():
+        d = tk.Toplevel(p)
+        d.title("Kullanım kılavuzu")
+        d.configure(bg=R["kart"])
+        d.geometry(f"{px(760)}x{min(px(760), p.winfo_screenheight() - px(120))}")
+        d.minsize(px(520), px(400))
+        d.transient(p)
+        pencere_belir(d)
+        d.after(10, lambda: pencere_koyu_baslik(d, koyu_tema))
+        ust_k = tk.Frame(d, bg=R["kart"], padx=px(26), pady=px(18))
+        ust_k.pack(fill="x")
+        tk.Label(ust_k, text="Kullanım kılavuzu", bg=R["kart"], fg=R["yazi"], font=(YAZI, 18, "bold")).pack(
+            side="left")
+        Dugme(ust_k, "Kapat", tur="hayalet", boy="kucuk", command=d.destroy).pack(side="right")
+        tk.Frame(d, bg=R["ayrac"], height=1).pack(fill="x")
+        govde_k = tk.Frame(d, bg=R["kart"])
+        govde_k.pack(fill="both", expand=True)
+        kb = ttk.Scrollbar(govde_k, orient="vertical")
+        kb.pack(side="right", fill="y")
+        t = tk.Text(govde_k, bg=R["kart"], fg=R["metin2"], font=F(10), wrap="word", bd=0, highlightthickness=0,
+                    padx=px(26), pady=px(14), spacing1=px(2), spacing3=px(4), yscrollcommand=kb.set,
+                    cursor="arrow", insertwidth=0)
+        t.pack(side="left", fill="both", expand=True)
+        kb.config(command=t.yview)
+        t.tag_configure("b", font=(YAZI, 13, "bold"), foreground=R["yazi"], spacing1=px(16), spacing3=px(6))
+        t.tag_configure("m", lmargin1=px(14), lmargin2=px(30))
+        t.tag_configure("n", foreground=R["soluk"], lmargin1=px(14), lmargin2=px(14))
+        for baslik_k, satirlar_k in KILAVUZ:
+            t.insert("end", baslik_k + "\n", "b")
+            for st_ in satirlar_k:
+                if st_.startswith("!"):
+                    t.insert("end", st_[1:].strip() + "\n", "n")
+                else:
+                    t.insert("end", "•  " + st_ + "\n", "m")
+        t.config(state="disabled")
 
     # --- yan menü: kanal kartı + sayfalar ---
     kanal_f = tk.Frame(yan, bg=R["yan"])
@@ -6833,11 +7063,10 @@ def arayuzu_baslat():
             yeni_f = sayfalar[anahtar]
 
             def kay(t):
-                yeni_f.grid_configure(pady=(int(px(26) * (1 - t)), 0))
                 sayfa_baslik.config(fg=karis(R["bg"], R["yazi"], t))
                 sayfa_alt.config(fg=karis(R["bg"], R["soluk"], t))
             kay(0)
-            anim("sayfa_gecis", 260, kay)
+            anim("sayfa_gecis", 220, kay)
         b, a = SAYFA_BILGI[anahtar]
         a = f"{profil_adi()}  ·  {T('Türkçe', 'İngilizce')} kanal" + (f"  ·  {a}" if a else "")
         sayfa_baslik.config(text=b)
@@ -7064,6 +7293,8 @@ def arayuzu_baslat():
         l2 = tk.Label(yaz_, text=alt_, bg=R["kart"], fg=R["soluk"], font=F(10), anchor="w", cursor="hand2")
         l2.pack(anchor="w", pady=(px(4), 0))
         b = Dugme(f, "Oluştur", tur="ana", command=lambda: yayinla(fmt))
+        ipucu(b, "Konuyu bulur, hikâyeyi yazar, seslendirir ve videoyu hazırlar. Yüklemeden önce hikâyeyi sana "
+                 "gösterir; sen onaylarsan devam eder.")
         b.pack(side="right")
 
         def hover(acik):
@@ -7110,10 +7341,14 @@ def arayuzu_baslat():
                 ui(lambda: son_goster(yeni[-1]))
             ui(lambda: durum["sayfa"] == "panel" and panel_yenile())
         is_baslat(is_, mod="uret", baslik_="Hazır videolar ekleniyor", fmt="kisa")
-    Dugme(ks, "📥  Hazır video ekle", tur="ikincil", boy="kucuk", command=hazir_ekle).pack(side="right",
-                                                                                          padx=(px(10), 0))
+    _he = Dugme(ks, "📥  Hazır video ekle", tur="ikincil", boy="kucuk", command=hazir_ekle)
+    _he.pack(side="right", padx=(px(10), 0))
+    bilgi_yanina(_he, "Kendi hazırladığın bitmiş videoları seçersin. Program sadece başlık, açıklama ve etiket yazar; "
+                      "videoyu yayın sırasına alır.")
     fikir_btn = Dugme(ks, "Fikir bul", tur="hayalet", boy="kucuk")
     fikir_btn.pack(side="left")
+    bilgi_yanina(fikir_btn, "Gemini'den birkaç hikâye fikri ister. Beğendiğini 'Konu' kutusuna yazıp Oluştur'a "
+                            "basarsın; kutuyu boş bırakırsan konuyu program seçer.")
     etiket(ks, "Tür", soluk=True, boyut=9).pack(side="left", padx=(px(16), px(6)))
     secim(ks, "tur", {t: t for t in (BIRADIM_ALANLARI if nblm_mi() else TURLER)}, 16).pack(side="left")
 
@@ -7149,12 +7384,15 @@ def arayuzu_baslat():
         ks_sat, konu_sayi = baslik_satiri(kk, "Konular")
         uret_b = Dugme(ks_sat, "＋  5 konu üret", tur="ikincil", boy="kucuk")
         uret_b.pack(side="right")
+        bilgi_yanina(uret_b, "Gemini'ye 5 yeni video konusu hazırlatır. Kanalındaki bütün videolara bakar; daha önce "
+                             "yapılmış bir konuyu tekrar etmez, en çok izlenen videolarına benzer konular seçer.")
         tk.Label(kk, text="Her konu için: ① 📋 Kaynak → NotebookLM'de yeni not defteri, 'Kopyalanan metin' olarak "
                           "yapıştır.   ② 📝 İstem → Video Özeti (Kısa, Türkçe) kalem simgesine yapıştır → Oluştur.",
                  bg=R["kart"], fg=R["soluk"], font=F(9), wraplength=px(560), justify="left").pack(
             anchor="w", pady=(px(6), px(10)))
         tum_b = Dugme(kk, "↗  NotebookLM'i aç", tur="ana")
         tum_b.pack(fill="x")
+        ipucu(tum_b, "NotebookLM'i tarayıcıda açar. Her konu için ayrı bir not defteri oluştur.")
         konu_liste = tk.Frame(kk, bg=R["kart"])
         konu_liste.pack(fill="x", pady=(px(12), 0))
 
@@ -7269,7 +7507,10 @@ def arayuzu_baslat():
                     "Videolar hazır", "Onay listesinin EN ÜSTÜNE eklendi (YENİ yazanlar):\n\n"
                     + "\n".join(hazirlananlar))))
             is_baslat(is_, mod="uret", baslik_=f"{len(dosyalar)} video hazırlanıyor", fmt="kisa")
-        Dugme(vk, "🎬  Videoları seç", tur="ana", command=video_ver).pack(fill="x")
+        _vs = Dugme(vk, "🎬  Videoları seç", tur="ana", command=video_ver)
+        _vs.pack(fill="x")
+        ipucu(_vs, "NotebookLM'den indirdiğin videoları seç. Program logoları keser, hızlandırır, rozet ve kapanış "
+                   "ekler; sonra aşağıdaki onay listesine koyar. Hiçbir şey sen onaylamadan yayınlanmaz.")
         baglanti(vk, "📂  ya da 'gelen' klasörüne at (plan doldurulurken işlenir)", lambda: (
             os.makedirs(_nblm_dosya("gelen"), exist_ok=True), klasor_ac(_nblm_dosya("gelen"))), 9).pack(
             anchor="w", pady=(px(10), 0))
@@ -7285,6 +7526,8 @@ def arayuzu_baslat():
         ok_sat, onay_sayi = baslik_satiri(ok_, "Onay bekleyen videolar")
         hepsi_b = Dugme(ok_sat, "✓  Hepsini onayla", tur="yesil", boy="kucuk")
         hepsi_b.pack(side="right")
+        bilgi_yanina(hepsi_b, "Listedeki bütün videoları izlemeden yayın sırasına alır. Emin değilsen videoları "
+                              "tek tek izleyip ✓ Onayla'ya bas.")
         tk.Label(ok_, text="İzle'ye basınca video açılır. Onayladığın video yayın planındaki ilk boş saatte "
                            "kendiliğinden yayınlanır.", bg=R["kart"], fg=R["soluk"], font=F(9)).pack(
             anchor="w", pady=(px(4), px(8)))
@@ -7333,15 +7576,34 @@ def arayuzu_baslat():
                 panel_yenile()
         hepsi_b.config(command=hepsini_onayla)
 
-        def satir(ust, metin, alt_metin, dugmeler, cizgi=True):
+        SATIR_IPUCU = (
+            ("Kaynak", "Bu konunun kaynak metnini panoya kopyalar. NotebookLM'de yeni not defteri aç, "
+                       "'Kopyalanan metin' seç ve yapıştır."),
+            ("İstem", "NotebookLM'in Video Özeti ayarına yapıştırılacak talimatı kopyalar (Kısa + Türkçe seç, "
+                      "kalem simgesindeki kutuya yapıştır)."),
+            ("İzle", "Hazırlanan videoyu bilgisayarındaki oynatıcıda açar. Onaylamadan önce mutlaka izle."),
+            ("Onayla", "Videoyu yayın sırasına alır. Yayın planındaki ilk boş saatte kendiliğinden yayınlanır."),
+            ("↻", "Videoyu güncel ayarlarla (hız, rozet, kapanış) baştan hazırlar."),
+            ("✕", "Listeden çıkarır. Dosya silinmez, sadece yayınlanmaz."),
+        )
+
+        def satir(ust, metin, alt_metin, dugmeler, cizgi=True, on=None):
             sat = tk.Frame(ust, bg=R["kart"])
             sat.pack(fill="x")
             if cizgi:
                 tk.Frame(sat, bg=R["ayrac"], height=1).pack(fill="x")
-            ic = tk.Frame(sat, bg=R["kart"], pady=px(7))
+            ic = tk.Frame(sat, bg=R["kart"], pady=px(8))
             ic.pack(fill="x")
             for t_, tur_, cmd in reversed(dugmeler):
-                Dugme(ic, t_, tur=tur_, boy="kucuk", command=cmd).pack(side="right", padx=(px(6), 0))
+                b_ = Dugme(ic, t_, tur=tur_, boy="kucuk", command=cmd)
+                b_.pack(side="right", padx=(px(6), 0))
+                acik = next((a_ for k__, a_ in SATIR_IPUCU if k__ in t_), None)
+                if acik:
+                    ipucu(b_, acik)
+            if on:                               # soldaki küçük rozet: sıra numarası ya da YENİ
+                o_m, o_bg, o_fg = on
+                tk.Label(ic, text=o_m, bg=o_bg, fg=o_fg, font=F(8, "orta"), padx=px(7), pady=px(2)).pack(
+                    side="left", padx=(0, px(10)))
             sol = tk.Frame(ic, bg=R["kart"])
             sol.pack(side="left", fill="x", expand=True)
             tk.Label(sol, text=metin, bg=R["kart"], fg=R["yazi"], font=F(10, "orta"), anchor="w",
@@ -7366,11 +7628,12 @@ def arayuzu_baslat():
             else:
                 tum_b.config(text="↗  NotebookLM'i aç")
                 for i, pk in enumerate(k_[:10]):
-                    satir(konu_liste, f"{i + 1}.  {kisalt(pk.get('baslik', ''))}",
+                    satir(konu_liste, kisalt(pk.get('baslik', '')),
                           f"{pk.get('alan', '')}" + (f"  ·  açılış: {buyuk(pk['kanca'])}" if pk.get("kanca") else ""),
                           [("📋 Kaynak", "ana", lambda pk=pk: kaynak_kopyala(pk)),
                            ("📝 İstem", "ikincil", lambda pk=pk: istem_kopyala(pk)),
-                           ("✕", "hayalet", lambda pk=pk: konu_atla(pk))], cizgi=i > 0)
+                           ("✕", "hayalet", lambda pk=pk: konu_atla(pk))], cizgi=i > 0,
+                          on=(str(i + 1), R["kart2"], R["soluk"]))
                 if len(k_) > 10:
                     tk.Label(konu_liste, text=f"+ {len(k_) - 10} konu daha", bg=R["kart"], fg=R["soluk"],
                              font=F(9)).pack(anchor="w", pady=(px(4), 0))
@@ -7393,14 +7656,15 @@ def arayuzu_baslat():
                 except ValueError:
                     yas_ = 1e9
                 kaynak_ad = re.split(r"[\\/]", g.get("kaynak_video") or "")[-1]
-                satir(onay_liste, ("🆕 YENİ  ·  " if yas_ < 3 * 3600 else "") + kisalt(g.get("baslik", ""), 70),
+                satir(onay_liste, kisalt(g.get("baslik", ""), 70),
                       f"{sure_yaz(g.get('sure') or 0)}  ·  {yon_}  ·  "
                       f"{'hazır video' if g.get('format') == 'hazir' else 'NotebookLM'}"
                       + (f"  ·  dosya: {kisalt(kaynak_ad, 40)}" if kaynak_ad else ""),
                       [("▶ İzle", "ikincil", lambda g=g: klasor_ac(g["dosya"])),
                        ("↻", "hayalet", lambda g=g: yeniden_hazirla(g)),
                        ("✓ Onayla", "yesil", lambda g=g: onayla(g)),
-                       ("✕", "hayalet", lambda g=g: reddet(g))], cizgi=i > 0)
+                       ("✕", "hayalet", lambda g=g: reddet(g))], cizgi=i > 0,
+                      on=("YENİ", R["vurgu"], R["vurgu_yazi"]) if yas_ < 3 * 3600 else None)
             # yayın sırası
             sira = [g for g in gecmis_oku() if g.get("plan_uretim") and not g.get("video_id")
                     and not g.get("onay_bekliyor") and not g.get("reddedildi") and os.path.exists(g.get("dosya", ""))]
@@ -7443,6 +7707,11 @@ def arayuzu_baslat():
                     command=lambda: son_secili() and hiz_penceresi(son_secili()))
     if nblm_mi():
         son_hiz.pack(side="right", padx=(0, px(8)))
+        ipucu(son_hiz, "Seçili videonun hızını değiştirir (1.0x–2.0x) ve yüklemeden önce önizleme gösterir. "
+                       "Planlı videoda yeni hali aynı saate yeniden yüklenir.")
+    ipucu(son_onay, "Seçili videoyu onaylar; yayın planındaki ilk boş saatte yayınlanır.")
+    ipucu(son_oynat, "Seçili videoyu bilgisayarında oynatır.")
+    ipucu(son_klasor, "Seçili videonun dosyasını klasöründe gösterir.")
     son_onay.pack(side="right", padx=(0, px(8)))
     son_onay.pack_forget()
     for b_ in (son_klasor, son_oynat, son_hiz):
@@ -7627,6 +7896,8 @@ def arayuzu_baslat():
                 izl = sayi(ist.get("izlenme")) if ist.get("izlenme") is not None else "–"
             elif ist.get("silindi"):
                 d_, et, izl = "YouTube'dan silinmiş", "soluk", "–"
+            elif kayit.get("reddedildi"):
+                d_, et, izl = "Yayınlanmayacak", "soluk", "–"
             elif os.path.exists(kayit.get("dosya", "")) and kayit.get("onay_bekliyor"):
                 d_, et, izl = "Onayını bekliyor", "bekliyor", "–"
             elif os.path.exists(kayit.get("dosya", "")):
@@ -8048,8 +8319,16 @@ def arayuzu_baslat():
     dur_btn = Dugme(pbt, "Durdur", tur="hayalet", boy="buyuk")
     dur_btn.pack(side="left", padx=(px(10), 0))
     dur_btn.config(state="disabled")
+    bilgi(pbt, "PLANI ŞİMDİ DOLDUR: Önümüzdeki günlerin boş yayın saatleri için sıradaki onaylı videoları YouTube'a "
+               "zamanlanmış olarak yükler; video yoksa yenisini hazırlar. Videolar hemen yayınlanmaz, saatinde "
+               "kendiliğinden yayınlanır.\n\nDURDUR: Süren işi, hazırlanan video bitince durdurur.").pack(
+        side="left", padx=(px(8), 0))
+    ipucu(plan_btn, "Boş yayın saatlerini doldurur: videolar YouTube'a zamanlanmış olarak yüklenir.")
+    ipucu(dur_btn, "Süren işi, hazırlanan video bitince durdurur.")
     yenile_btn = Dugme(psol, "Planlı videoları yenile  ·  BETA", tur="hayalet")
     yenile_btn.pack(fill="x", pady=(0, px(12)))
+    ipucu(yenile_btn, "Henüz yayınlanmamış planlı videolardan seçtiklerini gizliye alır ve yerlerine yenilerini "
+                      "hazırlar. Ayar değiştirdikten sonra işe yarar.")
     kilitli.append(yenile_btn)
 
     def plan_yenile_penceresi():
@@ -8307,8 +8586,10 @@ def arayuzu_baslat():
                          fg=R["soluk"], font=F(9))
     canli_lbl.pack(side="left")
     Dugme(ust_bar, "📂  Çıktı klasörü", boy="kucuk", command=lambda: klasor_ac(CIKTI)).pack(side="right")
-    Dugme(ust_bar, "↻  Şimdi yenile", tur="hayalet", boy="kucuk",
-          command=lambda: canli_yenile(zorla=True)).pack(side="right", padx=px(8))
+    _sy = Dugme(ust_bar, "↻  Şimdi yenile", tur="hayalet", boy="kucuk", command=lambda: canli_yenile(zorla=True))
+    _sy.pack(side="right", padx=px(8))
+    bilgi_yanina(_sy, "İzlenme, beğeni ve yorum sayılarını YouTube'dan şimdi yeniden çeker. Normalde kendiliğinden "
+                      "birkaç dakikada bir yenilenir.")
 
     govde = tk.Frame(sk, bg=R["bg"])
     govde.pack(fill="both", expand=True)
@@ -8463,6 +8744,10 @@ def arayuzu_baslat():
                     dt, et = "Herkese açık", "yuklendi"
                 for a_ in top:
                     top[a_] += int(ist.get(a_, 0) or 0)
+            elif kayit.get("reddedildi"):
+                dt, et = "Yayınlanmayacak", "yok"
+            elif var and kayit.get("onay_bekliyor"):
+                dt, et = "Onayını bekliyor", "bekliyor"
             elif var:
                 dt, et = "Yüklenmeyi bekliyor", "bekliyor"
             else:
@@ -10099,9 +10384,9 @@ def arayuzu_baslat():
 
             def is_():
                 bekleyen_isleri_yap(log, asama)
-                asama("Hazır: onay listesinde izleyip onayla", 100)
+                asama("Bekleyen işler tamamlandı", 100)
                 ui(lambda: panel_yenile() if durum["sayfa"] == "panel" else None)
-            is_baslat(is_, mod="uret", baslik_="Bekleyen işler yapılıyor", fmt="kisa")
+            is_baslat(is_, mod="kuyruk", baslik_="Bekleyen işler yapılıyor", fmt=None, goster=False)
         except Exception as e:
             log(f"[!] Bekleyen işler başlatılamadı: {str(e)[:150]}")
     p.after(4000, bekleyen_isler_baslat)

@@ -31,6 +31,13 @@ Tek programdan birden çok kanal yönetilir; her kanal ayrı bir **profil** olar
 - Yorumlara kanalın tonunda otomatik cevap, yeni videolara otomatik ilk yorum
 - Arka planda iş kuyruğu (`isler.json`)
 
+## Kullanım
+
+Adım adım anlatım: **[KULLANIM_KILAVUZU.md](KULLANIM_KILAVUZU.md)**. Aynı kılavuz programın içinde, üst çubuktaki
+**? Kılavuz** tuşunda da var. Tuşların yanındaki **( ! )** simgeleri o tuşun ne işe yaradığını yazar.
+
+Yapılan değişiklikler: [DEGISIKLIKLER.md](DEGISIKLIKLER.md)
+
 ## Kurulum
 
 1. **Python 3.10+** kur (Windows).
@@ -47,6 +54,22 @@ Tek programdan birden çok kanal yönetilir; her kanal ayrı bir **profil** olar
    ```
    python main.py
    ```
+   Windows'ta `baslat.bat` dosyasına çift tıklayarak konsol penceresi olmadan da açabilirsin.
+   Videoları işlemek için **ffmpeg** gerekir; sistemde yoksa `imageio-ffmpeg` paketiyle gelen kullanılır.
+
+## Klasör yapısı
+
+```
+main.py                 program
+gizli.json              Gemini API anahtarı (sen oluşturursun, paylaşılmaz)
+client_secret.json      YouTube OAuth istemcisi (sen eklersin, paylaşılmaz)
+arkaplan_videolari/     hikâye videolarının arka planları
+muzik/                  arka plan müzikleri
+fontlar/                alt yazı fontları
+profiller/<kanal>/      her kanalın ayarları, geçmişi, çıktıları ve YouTube girişi
+```
+
+Tek programdan birden çok kanal yönetilir; aynı kanal için aynı anda yalnızca bir pencere açılabilir.
 
 Kanal adı, logo, rozet, kapanış kartı, müzik ve arka plan videoları gibi dosyalar depoda yok; kendi kanalının dosyalarını program klasörüne koymalısın.
 

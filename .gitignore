@@ -39,3 +39,10 @@ main_eski_*.py
 __pycache__/
 *.pyc
 desktop.ini
+
+# Önbellek, kilit ve yerel yardımcı dosyalar
+kanal_videolari.json
+*.kilit
+GitHub_paylasim/
+Claude outputs/
+zamanla_duzelt.py
