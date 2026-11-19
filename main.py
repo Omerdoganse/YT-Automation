@@ -3120,6 +3120,30 @@ def yorum_izni_var():
 _yt = None
 _yt_creds = None
 _yt_kilit = threading.Lock()
+_yt_zaman = 0.0          # servisin kurulduğu an: uzun süre boşta kalan bağlantıyı Google kapatıyor (SSL EOF)
+
+
+def baglanti_hatasi_mi(e):
+    m_ = str(e)
+    return any(x in m_ for x in ("EOF occurred", "SSL", "Connection", "connection", "timed out", "reset by peer",
+                                 "Broken pipe", "RemoteDisconnected", "10054", "10053", "10060", "Unable to find the server"))
+
+
+def yt_tekrar(fn, log=print, deneme=4):
+    """YouTube isteğini bağlantı koptuğunda servisi yeniden kurarak tekrar dener. fn(yt) çağrılır."""
+    global _yt
+    for i in range(deneme):
+        try:
+            return fn(yt_servis(True, log))
+        except IptalHatasi:
+            raise
+        except Exception as e:
+            if not baglanti_hatasi_mi(e) or i == deneme - 1:
+                raise
+            log(f"[~] YouTube bağlantısı koptu, yeniden bağlanılıyor ({i + 1}. deneme)...")
+            with _yt_kilit:
+                _yt = None
+            time.sleep(2 * (i + 1))
 
 
 def _yt_paketler():
@@ -3130,10 +3154,11 @@ def _yt_paketler():
 
 def yt_servis(etkilesimli=True, log=print):
     """Yetkili YouTube servisini döndürür. Gerekirse tarayıcıda giriş açar."""
-    global _yt
+    global _yt, _yt_zaman
     with _yt_kilit:
-        if _yt is not None:
+        if _yt is not None and time.time() - _yt_zaman < 240:
             return _yt
+        _yt = None                    # 4 dakikadan eski bağlantı: yenisini kur (eski bağlantı kopmuş olabilir)
         _yt_paketler()
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
@@ -3147,11 +3172,20 @@ def yt_servis(etkilesimli=True, log=print):
             except Exception:
                 creds = None
         if creds and not creds.valid and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                log("[!] YouTube oturumu yenilenemedi, yeniden giriş gerekiyor.")
-                creds = None
+            for _d in range(3):
+                try:
+                    creds.refresh(Request())
+                    break
+                except Exception as e:
+                    if baglanti_hatasi_mi(e) and _d < 2:      # internet anlık koptuysa girişi silme, tekrar dene
+                        time.sleep(3 * (_d + 1))
+                        continue
+                    if baglanti_hatasi_mi(e):
+                        raise RuntimeError("YouTube'a bağlanılamadı (internet bağlantısı). Bağlantın düzelince "
+                                           f"tekrar dene. Ayrıntı: {str(e)[:120]}") from e
+                    log("[!] YouTube oturumu yenilenemedi, yeniden giriş gerekiyor.")
+                    creds = None
+                    break
         if not creds or not creds.valid:
             if not etkilesimli:
                 return None
@@ -3168,6 +3202,7 @@ def yt_servis(etkilesimli=True, log=print):
         global _yt_creds
         _yt_creds = creds
         _yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        _yt_zaman = time.time()
         return _yt
 
 
@@ -3389,8 +3424,8 @@ def kanal_dogrula(yt, log=print):
 
 def youtube_yukle(kayit, gizlilik="public", yayin_zamani=None, log=print, ilerleme=None):
     from googleapiclient.http import MediaFileUpload
+    yt_tekrar(lambda y: kanal_dogrula(y, log), log)
     yt = yt_servis(True, log)
-    kanal_dogrula(yt, log)
     durum = {"privacyStatus": gizlilik, "selfDeclaredMadeForKids": False,
              "embeddable": True}
     if yayin_zamani:

@@ -1,5 +1,11 @@
 # Değişiklikler
 
+## 2026-11-19
+**Düzeltmeler**
+- Program uzun süre açık kalınca yüklemede çıkan `EOF occurred in violation of protocol (_ssl.c)` hatası:
+  YouTube bağlantısı 4 dakikadan eskiyse yenisi kurulur, kopan istek otomatik tekrar denenir
+- İnternet anlık kopunca YouTube girişi silinip tarayıcıda yeniden giriş istenmiyordu; artık önce tekrar denenir
+
 ## 2026-11-15
 **Yeni**
 - Tuşların yanında **( ! )** bilgi simgeleri ve tuşların üstüne gelince açılan açıklama balonları
