@@ -3896,13 +3896,20 @@ YENİ: {yeni}
 Kanalda ve yayın sırasında zaten olan videolar:
 {liste}
 
-Yeni video, listedekilerden biriyle AYNI tekniği, etkiyi, araştırmayı ya da ana tavsiyeyi mi anlatıyor? Başlık farklı
-olsa bile içerik aynıysa (ör. ikisi de "hedefini kimseye söyleme" diyorsa, ikisi de "Eğer-o zaman planı"nı
-anlatıyorsa) "ayni": true. Sadece genel alan aynıysa (ikisi de odaklanma hakkında ama farklı teknik) false.
-Yanıtı YALNIZCA şu JSON biçiminde ver: {{"ayni": true/false, "hangisi": "listedeki benzer videonun başlığı ya da boş"}}"""
+Yeni video, listedekilerden biriyle AYNI adlandırılmış tekniği/etkiyi/araştırmayı ya da AYNI somut tavsiyeyi mi
+anlatıyor? Örnekler:
+- "hedefini kimseye söyleme" ile "hedefini herkese anlatma (Gollwitzer)" → AYNI (aynı tavsiye).
+- "Eğer-o zaman planı" ile "uygulama niyetleri" → AYNI (aynı teknik).
+- "çok çalışmak terfi getirmez (PIE modeli)" ile "imposter sendromu / yetersizlik hissi" → FARKLI (ikisi de kariyer
+  ama farklı konu).
+- "Pomodoro" ile "Ultradyan ritim" → FARKLI.
+Sadece genel alan, hedef kitle ya da duygu aynıysa FARKLI say. Emin değilsen FARKLI say.
+Yanıtı YALNIZCA şu JSON biçiminde ver:
+{{"ayni": true/false, "ortak_teknik": "ikisinde de geçen teknik/etki/tavsiyenin adı ya da boş",
+"hangisi": "listedeki benzer videonun başlığı ya da boş"}}"""
     try:
         v = _json_coz(_gemini_uret(prompt, log, json_mod=True))
-        if isinstance(v, dict) and v.get("ayni"):
+        if isinstance(v, dict) and v.get("ayni") and str(v.get("ortak_teknik") or "").strip():
             return str(v.get("hangisi") or "kanaldaki bir video")[:120]
     except IptalHatasi:
         raise
@@ -3960,7 +3967,9 @@ Alanlar:
 
 Yanıtı YALNIZCA şu JSON biçiminde ver:
 {{"konu": "...", "baslik": "...", "kanca": "...", "kaynak": "...", "istem": "...", "aciklama": "...", "etiketler": ["..."]}}"""
-    for deneme in range(4):
+    reddedilenler, alanlar_ = [], [a_ for a_ in BIRADIM_ALAN_AGIRLIK if a_ != alan_]
+    random.shuffle(alanlar_)
+    for deneme in range(6):
         v = _json_coz(_gemini_uret(prompt, log, json_mod=True))
         if not isinstance(v, dict) or not str(v.get("kaynak", "")).strip():
             continue
@@ -3972,9 +3981,16 @@ Yanıtı YALNIZCA şu JSON biçiminde ver:
         if not konu:
             benzeyen = konu_tekrar_mi({"konu": k_, "baslik": v.get("baslik", "")}, mevcutlar, log)
             if benzeyen:
-                log(f"[~] Bu konu kanalda zaten var ('{benzeyen}'), başka konu isteniyor...")
-                prompt += (f"\n\nÖNEMLİ: '{k_}' kanaldaki '{benzeyen}' videosuyla aynı şeyi anlatıyor; "
-                           "tamamen farklı bir teknik/etki seç.")
+                reddedilenler.append(k_)
+                yeni_alan = (alanlar_.pop(0) if alanlar_ and alan == "Karışık" and len(reddedilenler) >= 2
+                             else None)
+                log(f"[~] Bu konu kanalda zaten var ('{benzeyen[:70]}'), başka konu isteniyor"
+                    + (f" ('{yeni_alan}' alanından)..." if yeni_alan else "..."))
+                prompt += (f"\n\nÖNEMLİ: '{k_}' kanaldaki '{benzeyen[:90]}' videosuyla aynı şeyi anlatıyor; "
+                           "tamamen farklı bir teknik/etki seç. Reddedilen konular: " + "; ".join(reddedilenler))
+                if yeni_alan:
+                    alan_ = yeni_alan
+                    prompt += f"\nBu sefer konuyu \"{yeni_alan}\" alanından seç."
                 continue
         baslik = baslik_sinirla(re.sub(r"\s*#\w+", "", str(v.get("baslik") or k_)).strip(), 90)
         aciklama = str(v.get("aciklama", "")).strip()
@@ -3994,7 +4010,8 @@ Yanıtı YALNIZCA şu JSON biçiminde ver:
         nblm_kuyruk_yaz(kuyruk)
         log(f"[+] Yeni konu hazır: {paket['baslik']}")
         return paket
-    raise RuntimeError("Gemini konu paketini hazırlayamadı, tekrar deneyin.")
+    raise RuntimeError("Kanalda olmayan yeni bir konu bulunamadı ya da Gemini yanıt vermedi. Biraz sonra tekrar "
+                       "dene; Konu yazarak kendi konunu da verebilirsin.")
 
 
 def nblm_eslesen_paket(dosya):

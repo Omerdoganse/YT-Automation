@@ -1,5 +1,11 @@
 # Değişiklikler
 
+## 2026-11-20
+**Düzeltmeler**
+- BirAdım "5 konu üret" konu üretemiyordu: tekrar kontrolü aynı alandaki farklı konuları da (ör. iki ayrı kariyer
+  konusu) tekrar sayıyordu. Artık sadece aynı adlandırılmış teknik/etki/tavsiye tekrar sayılır; iki ret sonrası
+  başka bir alandan konu istenir, reddedilen konular Gemini'ye bildirilir
+
 ## 2026-11-19
 **Düzeltmeler**
 - Program uzun süre açık kalınca yüklemede çıkan `EOF occurred in violation of protocol (_ssl.c)` hatası:
