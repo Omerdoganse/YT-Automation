@@ -6,6 +6,10 @@ TETIK = [[None,"Hemen","Ama"],[None,"Psikolog","Gelenler"],[None,"Yan","Öğretm
  [None,"Öğrenci","Deneyin"],[None,"sonra","Ve"],[None,"Durmak"],[None,"Tahmin:","Kırk"],[None,"Bu","Kendilerini"],
  [None,"Araştırmacı","Öğretmen,","Ama"],[None,"Arşivleri","Gönüllülerin","Ama"],[None,"Üç"],[None,"Kimse","Her","Hayatta"],
  [None,'"Bana'],[None,"Deneyde","Ve"],[None],[None,"Odadaki"]]
+sys.path.insert(0, os.getcwd())
+if os.path.exists('sahne_mod.py'):
+    import sahne_mod
+    SAHNELER, TETIK = sahne_mod.SAHNELER, sahne_mod.TETIK
 raw = open('senaryo_v2.txt', encoding='utf-8').read().strip()
 paras = [re.sub(r'\[[^\]]*\] ?', '', p).split() for p in raw.split('\n\n')]
 w = [x for x in json.load(open('kelimeler_v2.json')) if not x['text'].startswith('[')]
